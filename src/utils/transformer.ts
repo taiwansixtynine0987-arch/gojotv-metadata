@@ -1,11 +1,14 @@
-// Transform Jikan + TMDB/Kitsu responses -> DB rows
+// Transform Kitsu response -> DB rows
 
 import {
-  JIKAN_STATUS_MAP,
-  JIKAN_SEASON_MAP,
-  JIKAN_MOVIE_TYPES,
+  KITSU_STATUS_MAP,
+  KITSU_MOVIE_SUBTYPES,
 } from "../config/constants";
-import type { JikanAnime } from "../types/jikan";
+import type {
+  KitsuAnimeResponse,
+  KitsuIncludedResource,
+  KitsuResource,
+} from "../types/kitsu";
 import type { AnimeSeason, AnimeStatus } from "../types/database";
 
 export interface TransformedAnime {
@@ -57,7 +60,6 @@ export function slugify(input: string): string {
 function cleanText(text: string | null): string | null {
   if (!text) return null;
   return text
-    .replace(/\[Written by MAL Rewrite\]/gi, "")
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<[^>]*>/g, "")
     .replace(/&quot;/g, '"')
@@ -70,103 +72,148 @@ function cleanText(text: string | null): string | null {
     .trim() || null;
 }
 
-function pickTitle(anime: JikanAnime): string {
+function pickTitle(attrs: KitsuResource["attributes"]): string {
   return (
-    anime.title_english ??
-    anime.title ??
-    anime.title_japanese ??
-    `mal-${anime.mal_id}`
+    attrs.titles?.en ??
+    attrs.canonicalTitle ??
+    attrs.titles?.en_jp ??
+    attrs.titles?.ja_jp ??
+    `kitsu-${attrs.slug ?? "unknown"}`
   );
 }
 
-function pickPoster(anime: JikanAnime): string | null {
-  return (
-    anime.images?.jpg?.large_image_url ??
-    anime.images?.jpg?.image_url ??
-    anime.images?.webp?.large_image_url ??
-    null
-  );
+function pickEnglishTitle(attrs: KitsuResource["attributes"]): string | null {
+  return attrs.titles?.en ?? null;
+}
+
+function pickRomajiTitle(attrs: KitsuResource["attributes"]): string | null {
+  return attrs.titles?.en_jp ?? attrs.canonicalTitle ?? null;
+}
+
+function pickPoster(attrs: KitsuResource["attributes"]): string | null {
+  const p = attrs.posterImage;
+  if (!p) return null;
+  return p.original ?? p.large ?? p.medium ?? null;
 }
 
 function mapStatus(status: string | null): AnimeStatus | null {
   if (!status) return null;
-  const mapped = JIKAN_STATUS_MAP[status];
+  const mapped = KITSU_STATUS_MAP[status.toLowerCase()];
   return mapped ? (mapped as AnimeStatus) : null;
 }
 
-function mapSeason(season: string | null): AnimeSeason | null {
-  if (!season) return null;
-  const mapped = JIKAN_SEASON_MAP[season.toLowerCase()];
-  return mapped ? (mapped as AnimeSeason) : null;
+function isMovieSubtype(subtype: string | null): boolean {
+  return subtype ? KITSU_MOVIE_SUBTYPES.has(subtype.toLowerCase()) : false;
 }
 
-function isMovieType(type: string | null): boolean {
-  return type ? JIKAN_MOVIE_TYPES.has(type) : false;
+function buildRating(ageRating: string | null): string | null {
+  if (!ageRating) return null;
+  // Kitsu: "G", "PG", "R", "R18"
+  const map: Record<string, string> = {
+    G: "G",
+    PG: "PG",
+    R: "R",
+    R18: "R+",
+  };
+  return map[ageRating] ?? null;
 }
 
-function buildRating(anime: JikanAnime): string | null {
-  // Jikan "rating" is like "PG-13 - Teens 13 or older". Extract the code.
-  const raw = anime.rating;
-  if (!raw) return null;
-  const match = raw.match(/^(G|PG|PG-13|R|R\+|Rx)\b/);
-  return match ? match[1] : null;
+function parseAverageRating(avg: string | null): number | null {
+  if (!avg) return null;
+  const n = Number.parseFloat(avg);
+  return Number.isFinite(n) ? n : null;
+}
+
+function extractYear(startDate: string | null): number | null {
+  if (!startDate) return null;
+  const match = startDate.match(/^(\d{4})/);
+  if (!match) return null;
+  const y = Number.parseInt(match[1], 10);
+  return Number.isFinite(y) ? y : null;
+}
+
+function extractSeasonFromDate(
+  startDate: string | null
+): AnimeSeason | null {
+  if (!startDate) return null;
+  const monthMatch = startDate.match(/^\d{4}-(\d{2})/);
+  if (!monthMatch) return null;
+  const month = Number.parseInt(monthMatch[1], 10);
+  if (month >= 1 && month <= 3) return "winter";
+  if (month >= 4 && month <= 6) return "spring";
+  if (month >= 7 && month <= 9) return "summer";
+  if (month >= 10 && month <= 12) return "fall";
+  return null;
 }
 
 // ============================================================
 // Main transformer
 // ============================================================
 
-export function transformJikanAnime(
-  anime: JikanAnime,
+export function transformKitsuAnime(
+  response: KitsuAnimeResponse,
+  malId: number,
   anilistId: number | null,
   bannerImage: string | null
 ): TransformedAnime {
-  const title = pickTitle(anime);
+  const resource = response.data;
+  const attrs = resource.attributes;
+  const title = pickTitle(attrs);
   const slug = slugify(title);
 
   return {
-    mal_id: anime.mal_id,
+    mal_id: malId,
     anilist_id: anilistId,
     slug,
     title,
-    english_title: anime.title_english,
-    romaji_title: anime.title,
-    synonyms: anime.title_synonyms ?? null,
-    description: cleanText(anime.synopsis),
-    status: mapStatus(anime.status),
-    season: mapSeason(anime.season),
-    year: anime.year ?? null,
-    score: anime.score ?? null,
-    popularity: anime.popularity ?? null,
-    poster_image: pickPoster(anime),
+    english_title: pickEnglishTitle(attrs),
+    romaji_title: pickRomajiTitle(attrs),
+    synonyms: attrs.abbreviatedTitles ?? null,
+    description: cleanText(attrs.synopsis),
+    status: mapStatus(attrs.status),
+    season: extractSeasonFromDate(attrs.startDate),
+    year: extractYear(attrs.startDate),
+    score: parseAverageRating(attrs.averageRating),
+    popularity: attrs.userCount ?? null,
+    poster_image: pickPoster(attrs),
     banner_image: bannerImage,
     cover_color: null,
-    source: anime.source ?? null,
-    episodes_count: anime.episodes ?? null,
-    duration: anime.duration ?? null,
-    rating: buildRating(anime),
-    is_movie: isMovieType(anime.type),
-    is_adult: isAdultRating(anime.rating),
-    trailer_embed_url: anime.trailer?.embed_url ?? null,
+    source: attrs.showType ?? null,
+    episodes_count: attrs.episodeCount ?? null,
+    duration: attrs.episodeLength ? `${attrs.episodeLength} min` : null,
+    rating: buildRating(attrs.ageRating),
+    is_movie: isMovieSubtype(attrs.subtype),
+    is_adult: attrs.nsfw ?? false,
+    trailer_embed_url: attrs.youtubeVideoId
+      ? `https://www.youtube.com/embed/${attrs.youtubeVideoId}`
+      : null,
   };
 }
 
-function isAdultRating(rating: string | null): boolean {
-  if (!rating) return false;
-  return /^(R\+|Rx)\b/.test(rating);
-}
-
-export function extractGenres(anime: JikanAnime): string[] {
+// Extract genres + categories + studios from `included` array
+export function extractGenres(response: KitsuAnimeResponse): string[] {
   const names: string[] = [];
-  for (const g of anime.genres ?? []) names.push(g.name);
-  for (const g of anime.themes ?? []) names.push(g.name);
-  for (const g of anime.demographics ?? []) names.push(g.name);
+  const included = response.included ?? [];
+  for (const item of included) {
+    if (item.type === "genres" || item.type === "categories") {
+      const name = item.attributes?.name ?? item.attributes?.title;
+      if (name) names.push(name);
+    }
+  }
   return Array.from(new Set(names)).filter(Boolean);
 }
 
-export function extractStudios(anime: JikanAnime): TransformedStudio[] {
+export function extractStudios(
+  response: KitsuAnimeResponse
+): TransformedStudio[] {
   const names: string[] = [];
-  for (const s of anime.studios ?? []) names.push(s.name);
+  const included = response.included ?? [];
+  for (const item of included) {
+    if (item.type === "studios") {
+      const name = item.attributes?.name ?? item.attributes?.title;
+      if (name) names.push(name);
+    }
+  }
   return Array.from(new Set(names))
     .filter(Boolean)
     .map((name) => ({ name }));
