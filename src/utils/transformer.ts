@@ -6,7 +6,6 @@ import {
 } from "../config/constants";
 import type {
   KitsuAnimeResponse,
-  KitsuIncludedResource,
   KitsuResource,
 } from "../types/kitsu";
 import type { AnimeSeason, AnimeStatus } from "../types/database";
@@ -59,17 +58,19 @@ export function slugify(input: string): string {
 
 function cleanText(text: string | null): string | null {
   if (!text) return null;
-  return text
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<[^>]*>/g, "")
-    .replace(/&quot;/g, '"')
-    .replace(/&#039;/g, "'")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim() || null;
+  return (
+    text
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<[^>]*>/g, "")
+      .replace(/&quot;/g, '"')
+      .replace(/&#039;/g, "'")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim() || null
+  );
 }
 
 function pickTitle(attrs: KitsuResource["attributes"]): string {
@@ -108,7 +109,6 @@ function isMovieSubtype(subtype: string | null): boolean {
 
 function buildRating(ageRating: string | null): string | null {
   if (!ageRating) return null;
-  // Kitsu: "G", "PG", "R", "R18"
   const map: Record<string, string> = {
     G: "G",
     PG: "PG",
@@ -132,9 +132,7 @@ function extractYear(startDate: string | null): number | null {
   return Number.isFinite(y) ? y : null;
 }
 
-function extractSeasonFromDate(
-  startDate: string | null
-): AnimeSeason | null {
+function extractSeasonFromDate(startDate: string | null): AnimeSeason | null {
   if (!startDate) return null;
   const monthMatch = startDate.match(/^\d{4}-(\d{2})/);
   if (!monthMatch) return null;
@@ -190,7 +188,7 @@ export function transformKitsuAnime(
   };
 }
 
-// Extract genres + categories + studios from `included` array
+// Extract genres + categories from `included` array
 export function extractGenres(response: KitsuAnimeResponse): string[] {
   const names: string[] = [];
   const included = response.included ?? [];
@@ -203,13 +201,14 @@ export function extractGenres(response: KitsuAnimeResponse): string[] {
   return Array.from(new Set(names)).filter(Boolean);
 }
 
+// Extract studios from `included` array (Kitsu uses "producers" relationship)
 export function extractStudios(
   response: KitsuAnimeResponse
 ): TransformedStudio[] {
   const names: string[] = [];
   const included = response.included ?? [];
   for (const item of included) {
-    if (item.type === "studios") {
+    if (item.type === "producers") {
       const name = item.attributes?.name ?? item.attributes?.title;
       if (name) names.push(name);
     }
