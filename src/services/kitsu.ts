@@ -1,4 +1,4 @@
-// Kitsu client — fallback banner/cover source (no API key needed)
+// Kitsu client — primary metadata source
 
 import {
   KITSU_BASE_URL,
@@ -47,11 +47,8 @@ async function fetchWithTimeout(
   }
 }
 
-// Returns cover image URL (fallback for banner) or null
-export async function fetchKitsuCoverUrl(
-  kitsuId: number
-): Promise<string | null> {
-  const url = `${KITSU_BASE_URL}/anime/${kitsuId}`;
+async function kitsuRequest<T>(path: string): Promise<T> {
+  const url = `${KITSU_BASE_URL}${path}`;
   let lastError: KitsuError | null = null;
 
   for (let attempt = 0; attempt < KITSU_RETRY_MAX_ATTEMPTS; attempt++) {
@@ -70,29 +67,33 @@ export async function fetchKitsuCoverUrl(
         KITSU_FETCH_TIMEOUT_MS
       );
 
-      if (response.status === 404) return null;
-
-      if (!response.ok) {
-        if (response.status !== 429 && response.status < 500) {
-          throw new KitsuError(
-            `HTTP ${response.status}`,
-            response.status,
-            false
-          );
-        }
-        lastError = new KitsuError(
-          `Server error ${response.status}`,
-          response.status,
-          true
-        );
-        if (isLast) break;
-        await sleep(computeBackoff(attempt));
-        continue;
+      if (response.ok) {
+        return (await response.json()) as T;
       }
 
-      const json = (await response.json()) as KitsuAnimeResponse;
-      const cover = json.data?.attributes?.coverImage;
-      return cover?.original ?? cover?.large ?? cover?.medium ?? null;
+      if (response.status === 404) {
+        throw new KitsuError(`Not found: ${path}`, 404, false);
+      }
+
+      if (response.status !== 429 && response.status < 500) {
+        const text = await response.text().catch(() => "");
+        throw new KitsuError(
+          `HTTP ${response.status}: ${text.slice(0, 200)}`,
+          response.status,
+          false
+        );
+      }
+
+      lastError = new KitsuError(
+        response.status === 429
+          ? "Rate limited (429)"
+          : `Server error ${response.status}`,
+        response.status,
+        true
+      );
+
+      if (isLast) break;
+      await sleep(computeBackoff(attempt));
     } catch (err) {
       if (err instanceof KitsuError && !err.retryable) throw err;
       lastError =
@@ -109,4 +110,35 @@ export async function fetchKitsuCoverUrl(
   }
 
   throw lastError ?? new KitsuError("Kitsu request failed", 0, false);
+}
+
+// Fetch full anime data by Kitsu ID (with genres + studios via ?include)
+export async function fetchAnimeByKitsuId(
+  kitsuId: number
+): Promise<KitsuAnimeResponse | null> {
+  try {
+    const response = await kitsuRequest<KitsuAnimeResponse>(
+      `/anime/${kitsuId}?include=genres,categories,studios`
+    );
+    return response;
+  } catch (err) {
+    if (err instanceof KitsuError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+// Banner fallback: coverImage from Kitsu
+export async function fetchKitsuCoverUrl(
+  kitsuId: number
+): Promise<string | null> {
+  try {
+    const response = await kitsuRequest<KitsuAnimeResponse>(
+      `/anime/${kitsuId}`
+    );
+    const cover = response.data?.attributes?.coverImage;
+    return cover?.original ?? cover?.large ?? cover?.medium ?? null;
+  } catch (err) {
+    if (err instanceof KitsuError && err.status === 404) return null;
+    throw err;
+  }
 }
