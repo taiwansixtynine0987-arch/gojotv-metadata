@@ -112,13 +112,13 @@ async function kitsuRequest<T>(path: string): Promise<T> {
   throw lastError ?? new KitsuError("Kitsu request failed", 0, false);
 }
 
-// Fetch full anime data by Kitsu ID (with genres + categories + producers via ?include)
+// Fetch full anime data by Kitsu ID (with genres + categories)
 export async function fetchAnimeByKitsuId(
   kitsuId: number
 ): Promise<KitsuAnimeResponse | null> {
   try {
     const response = await kitsuRequest<KitsuAnimeResponse>(
-      `/anime/${kitsuId}?include=genres,categories,producers`
+      `/anime/${kitsuId}?include=genres,categories`
     );
     return response;
   } catch (err) {
