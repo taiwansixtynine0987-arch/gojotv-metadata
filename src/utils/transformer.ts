@@ -4,10 +4,7 @@ import {
   KITSU_STATUS_MAP,
   KITSU_MOVIE_SUBTYPES,
 } from "../config/constants";
-import type {
-  KitsuAnimeResponse,
-  KitsuResource,
-} from "../types/kitsu";
+import type { KitsuAnimeResponse, KitsuResource } from "../types/kitsu";
 import type { AnimeSeason, AnimeStatus } from "../types/database";
 
 export interface TransformedAnime {
@@ -201,19 +198,10 @@ export function extractGenres(response: KitsuAnimeResponse): string[] {
   return Array.from(new Set(names)).filter(Boolean);
 }
 
-// Extract studios from `included` array (Kitsu uses "producers" relationship)
+// Studios — Kitsu-র studio relationship নেই, তাই empty array
+// (ভবিষ্যতে separate API call দিয়ে যোগ করা যাবে)
 export function extractStudios(
-  response: KitsuAnimeResponse
+  _response: KitsuAnimeResponse
 ): TransformedStudio[] {
-  const names: string[] = [];
-  const included = response.included ?? [];
-  for (const item of included) {
-    if (item.type === "producers") {
-      const name = item.attributes?.name ?? item.attributes?.title;
-      if (name) names.push(name);
-    }
-  }
-  return Array.from(new Set(names))
-    .filter(Boolean)
-    .map((name) => ({ name }));
+  return [];
 }
