@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
-    "stealth-fetch": "^1.1.3"
+    "stealth-fetch": "^0.2.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240909.0",
