@@ -2,9 +2,8 @@
 // Process a single MetadataJob: Kitsu metadata + TMDB/Kitsu banner -> DB -> stream queue
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { fetchAnimeByKitsuId } from "../services/kitsu";
+import { fetchAnimeByKitsuId, fetchKitsuCoverUrl } from "../services/kitsu";
 import { fetchBannerUrl } from "../services/tmdb";
-import { fetchKitsuCoverUrl } from "../services/kitsu";
 import {
   transformKitsuAnime,
   extractGenres,
@@ -284,7 +283,7 @@ async function upsertEpisodes(
 
 function parseDurationMinutes(duration: string | null): number | null {
   if (!duration) return null;
-  const match = duration.match(/(\d+)\s*min/i);
+  const match = duration.match(/(\d+)/);
   if (!match) return null;
   const n = Number.parseInt(match[1], 10);
   return Number.isFinite(n) ? n : null;
