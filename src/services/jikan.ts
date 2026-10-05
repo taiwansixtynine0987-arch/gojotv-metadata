@@ -1,7 +1,7 @@
 // Jikan v4 client using stealth-fetch to bypass cf-* header injection
 // Includes in-memory rate limiter (per worker instance)
 
-import { request as stealthRequest } from "stealth-fetch";
+import { request as stealthRequest, toWebResponse } from "stealth-fetch";
 import {
   JIKAN_BASE_URL,
   JIKAN_USER_AGENT,
@@ -55,7 +55,8 @@ async function fetchWithTimeout(
   const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => reject(new Error("Jikan request timeout")), timeoutMs);
   });
-  return Promise.race([
+
+  const httpResponse = await Promise.race([
     stealthRequest(url, {
       method: "GET",
       headers: {
@@ -63,9 +64,13 @@ async function fetchWithTimeout(
         "User-Agent": JIKAN_USER_AGENT,
       },
       redirect: "follow",
+      timeout: timeoutMs,
     }),
     timeoutPromise,
   ]);
+
+  // Convert custom HttpResponse to standard Web Response
+  return toWebResponse(httpResponse);
 }
 
 async function jikanRequest<T>(path: string): Promise<T> {
@@ -89,7 +94,11 @@ async function jikanRequest<T>(path: string): Promise<T> {
       }
 
       if (response.status === 403) {
-        throw new JikanError(`Forbidden (403) — Jikan blocking`, 403, false);
+        throw new JikanError(
+          `Forbidden (403) — Jikan blocking`,
+          403,
+          false
+        );
       }
 
       if (response.status === 429) {
