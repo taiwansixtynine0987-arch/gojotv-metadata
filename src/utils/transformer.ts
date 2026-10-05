@@ -118,7 +118,9 @@ function buildRating(ageRating: string | null): string | null {
 function parseAverageRating(avg: string | null): number | null {
   if (!avg) return null;
   const n = Number.parseFloat(avg);
-  return Number.isFinite(n) ? n : null;
+  if (!Number.isFinite(n)) return null;
+  // Kitsu returns 0-100 scale; normalize to 0-10
+  return Math.round((n / 10) * 100) / 100;
 }
 
 function extractYear(startDate: string | null): number | null {
