@@ -1,14 +1,23 @@
 // W2 Metadata Handler
-// Process a single MetadataJob: Kitsu metadata + TMDB/Kitsu banner -> DB -> stream queue
+// Process a single MetadataJob:
+//   1. Try Jikan (via stealth-fetch) → primary metadata
+//   2. Fallback to Kitsu → if Jikan fails
+//   3. TMDB banner → primary; Kitsu cover → fallback
+//   4. Save to DB → push stream-sync-queue
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { fetchAnimeByMalId } from "../services/jikan";
 import { fetchAnimeByKitsuId, fetchKitsuCoverUrl } from "../services/kitsu";
 import { fetchBannerUrl } from "../services/tmdb";
 import {
+  transformJikanAnime,
   transformKitsuAnime,
-  extractGenres,
-  extractStudios,
+  extractJikanGenres,
+  extractJikanStudios,
+  extractKitsuGenres,
+  extractKitsuStudios,
   type TransformedAnime,
+  type TransformedStudio,
 } from "../utils/transformer";
 import type { MetadataJob, StreamJob } from "../types/queue";
 
@@ -23,6 +32,7 @@ export interface HandlerResult {
   slug: string;
   episodeCount: number;
   isNew: boolean;
+  source: "jikan" | "kitsu";
 }
 
 export async function processMetadataJob(
@@ -32,66 +42,84 @@ export async function processMetadataJob(
   const { supabase, streamQueue, tmdbApiKey } = deps;
   const malId = job.mal_id;
 
-  if (!job.kitsu_id) {
-    throw new Error(`Missing kitsu_id for mal_id=${malId}`);
-  }
+  let transformed: TransformedAnime | null = null;
+  let genres: string[] = [];
+  let studios: TransformedStudio[] = [];
+  let source: "jikan" | "kitsu" = "jikan";
 
-  // 1. Fetch Kitsu metadata (primary source)
-  const kitsuResponse = await fetchAnimeByKitsuId(job.kitsu_id);
-  if (!kitsuResponse) {
-    throw new Error(`Kitsu returned null for kitsu_id=${job.kitsu_id}`);
-  }
-
-  // 2. Fetch banner — TMDB primary, Kitsu fallback
-  let bannerImage: string | null = null;
-
-  if (job.tmdb_id) {
+  // -------- Step 1: Try Jikan (primary) --------
+  if (malId) {
     try {
-      bannerImage = await fetchBannerUrl(job.tmdb_id, tmdbApiKey);
+      const jikanAnime = await fetchAnimeByMalId(malId);
+      if (jikanAnime) {
+        const banner = await resolveBanner(
+          job.tmdb_id,
+          job.kitsu_id,
+          tmdbApiKey
+        );
+        transformed = transformJikanAnime(jikanAnime, job.anilist_id, banner);
+        genres = extractJikanGenres(jikanAnime);
+        studios = extractJikanStudios(jikanAnime);
+        source = "jikan";
+      }
     } catch (err) {
       console.warn(
-        `[W2] TMDB banner failed for kitsu_id=${job.kitsu_id}:`,
+        `[W2] Jikan failed for mal_id=${malId}:`,
         err instanceof Error ? err.message : err
       );
     }
   }
 
-  if (!bannerImage) {
+  // -------- Step 2: Fallback to Kitsu --------
+  if (!transformed && job.kitsu_id) {
     try {
-      bannerImage = await fetchKitsuCoverUrl(job.kitsu_id);
+      const kitsuResponse = await fetchAnimeByKitsuId(job.kitsu_id);
+      if (kitsuResponse) {
+        const banner = await resolveBanner(
+          job.tmdb_id,
+          job.kitsu_id,
+          tmdbApiKey
+        );
+        transformed = transformKitsuAnime(
+          kitsuResponse,
+          job.mal_id,
+          job.anilist_id,
+          banner
+        );
+        genres = extractKitsuGenres(kitsuResponse);
+        studios = extractKitsuStudios(kitsuResponse);
+        source = "kitsu";
+      }
     } catch (err) {
       console.warn(
-        `[W2] Kitsu banner failed for kitsu_id=${job.kitsu_id}:`,
+        `[W2] Kitsu failed for kitsu_id=${job.kitsu_id}:`,
         err instanceof Error ? err.message : err
       );
     }
   }
 
-  // 3. Transform
-  const transformed = transformKitsuAnime(
-    kitsuResponse,
-    job.mal_id,
-    job.anilist_id,
-    bannerImage
-  );
+  if (!transformed) {
+    throw new Error(
+      `Both Jikan and Kitsu failed for mal_id=${malId}, kitsu_id=${job.kitsu_id}`
+    );
+  }
 
-  // 4. Ensure slug uniqueness
-  const finalSlug = await resolveUniqueSlug(supabase, transformed);
-  transformed.slug = finalSlug;
+  // -------- Step 3: Ensure slug uniqueness --------
+  transformed.slug = await resolveUniqueSlug(supabase, transformed);
 
-  // 5. Upsert anime
+  // -------- Step 4: Upsert anime --------
   const { animeId, isNew } = await upsertAnime(supabase, transformed);
 
-  // 6. Episodes
+  // -------- Step 5: Episodes --------
   const episodeRecords = await upsertEpisodes(supabase, animeId, transformed);
 
-  // 7. Genres
-  await upsertGenres(supabase, animeId, extractGenres(kitsuResponse));
+  // -------- Step 6: Genres --------
+  await upsertGenres(supabase, animeId, genres);
 
-  // 8. Studios
-  await upsertStudios(supabase, animeId, extractStudios(kitsuResponse));
+  // -------- Step 7: Studios --------
+  await upsertStudios(supabase, animeId, studios);
 
-  // 9. Push stream job
+  // -------- Step 8: Push stream job --------
   if (episodeRecords.length > 0) {
     const streamJob: StreamJob = {
       anime_id: animeId,
@@ -110,7 +138,44 @@ export async function processMetadataJob(
     slug: transformed.slug,
     episodeCount: episodeRecords.length,
     isNew,
+    source,
   };
+}
+
+// ============================================================
+// Banner resolver: TMDB primary → Kitsu cover fallback
+// ============================================================
+
+async function resolveBanner(
+  tmdbId: number | null,
+  kitsuId: number | null,
+  tmdbApiKey: string
+): Promise<string | null> {
+  if (tmdbId) {
+    try {
+      const url = await fetchBannerUrl(tmdbId, tmdbApiKey);
+      if (url) return url;
+    } catch (err) {
+      console.warn(
+        `[W2] TMDB banner failed for tmdb_id=${tmdbId}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  if (kitsuId) {
+    try {
+      const url = await fetchKitsuCoverUrl(kitsuId);
+      if (url) return url;
+    } catch (err) {
+      console.warn(
+        `[W2] Kitsu banner failed for kitsu_id=${kitsuId}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  return null;
 }
 
 // ============================================================
@@ -248,6 +313,10 @@ async function upsertEpisodes(
       duration: number | null;
     }> = [];
 
+    const durationMinutes = data.duration
+      ? Number.parseInt(data.duration, 10)
+      : null;
+
     for (let n = 1; n <= total; n++) {
       if (!existingMap.has(n)) {
         toInsert.push({
@@ -255,7 +324,10 @@ async function upsertEpisodes(
           episode_number: n,
           title: `Episode ${n}`,
           is_filler: false,
-          duration: parseDurationMinutes(data.duration),
+          duration:
+            durationMinutes !== null && Number.isFinite(durationMinutes)
+              ? durationMinutes
+              : null,
         });
       }
     }
@@ -279,14 +351,6 @@ async function upsertEpisodes(
   return Array.from(existingMap.entries())
     .map(([episode_number, id]) => ({ id, episode_number }))
     .sort((a, b) => a.episode_number - b.episode_number);
-}
-
-function parseDurationMinutes(duration: string | null): number | null {
-  if (!duration) return null;
-  const match = duration.match(/(\d+)/);
-  if (!match) return null;
-  const n = Number.parseInt(match[1], 10);
-  return Number.isFinite(n) ? n : null;
 }
 
 async function upsertGenres(
@@ -346,7 +410,7 @@ async function upsertGenres(
 async function upsertStudios(
   supabase: SupabaseClient,
   animeId: string,
-  studios: Array<{ name: string }>
+  studios: TransformedStudio[]
 ): Promise<void> {
   if (studios.length === 0) return;
 
