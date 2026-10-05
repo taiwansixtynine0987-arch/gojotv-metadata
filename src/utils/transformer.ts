@@ -175,7 +175,7 @@ export function transformKitsuAnime(
     cover_color: null,
     source: attrs.showType ?? null,
     episodes_count: attrs.episodeCount ?? null,
-    duration: attrs.episodeLength ? `${attrs.episodeLength} min` : null,
+    duration: attrs.episodeLength ? String(attrs.episodeLength) : null,
     rating: buildRating(attrs.ageRating),
     is_movie: isMovieSubtype(attrs.subtype),
     is_adult: attrs.nsfw ?? false,
