@@ -1,6 +1,6 @@
 {
   "name": "gojotv-metadata",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,8 @@
     "tail": "wrangler tail"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.4"
+    "@supabase/supabase-js": "^2.45.4",
+    "stealth-fetch": "^1.1.3"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240909.0",
