@@ -113,6 +113,10 @@ async function processOne(
       anime_id: animeId,
       mal_id: transformed.mal_id,
       anilist_id: transformed.anilist_id,
+      // ✅ NEW — titles for W3 to search Tatakai sources
+      title: transformed.title,
+      english_title: transformed.english_title,
+      romaji_title: transformed.romaji_title,
       episodes: episodeRecords.map((e) => e.episode_number),
       priority: job.priority,
       category: job.category,
