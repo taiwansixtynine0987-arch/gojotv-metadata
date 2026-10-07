@@ -34,6 +34,10 @@ export interface StreamJob {
   anime_id: string;
   mal_id: number | null;
   anilist_id: number | null;
+  // ✅ NEW — titles for W3 to search Tatakai sources (hindi + desi dub)
+  title?: string;
+  english_title?: string | null;
+  romaji_title?: string | null;
   episodes: number[];
   priority: JobPriority;
   category: MetadataCategory;
