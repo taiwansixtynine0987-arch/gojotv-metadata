@@ -6,6 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 [observability]
 enabled = true
 
+# metadata-sync-queue consumer (W1 → W2)
 [[queues.consumers]]
 queue = "metadata-sync-queue"
 max_batch_size = 20
@@ -13,6 +14,11 @@ max_batch_timeout = 30
 max_retries = 3
 max_concurrency = 3
 
+# stream-sync-queue producer (W2 → W3)
 [[queues.producers]]
 queue = "stream-sync-queue"
 binding = "STREAM_QUEUE"
+
+# Environment variables
+[vars]
+ANILIST_PROXY = "https://gojotv-anilist-proxy-j29a1nndttza.taiwansixtynine0987-arch.deno.net"
